@@ -338,6 +338,7 @@ export const investmentsApi = {
   async create(payload: {
     name: string;
     platform: string;
+    asset_code?: string | null;
     type: string;
     purchase_date: string;
     units: number;
@@ -350,7 +351,7 @@ export const investmentsApi = {
     const res = await apiClient.post<ApiSuccessResponse<Investment>>('/investments', payload);
     return res.data.data;
   },
-  async updatePrice(id: number, payload: { current_market_price: number }) {
+  async updatePrice(id: number, payload: { current_market_price: number; asset_code?: string | null }) {
     const res = await apiClient.put<ApiSuccessResponse<Investment>>(`/investments/${id}`, payload);
     return res.data.data;
   },

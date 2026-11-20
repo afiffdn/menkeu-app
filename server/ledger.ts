@@ -761,6 +761,7 @@ export function hydrateInvestment(state: DatabaseState, investmentId: number): I
     family_id: inv.family_id,
     name: inv.name,
     platform: inv.platform,
+    asset_code: inv.asset_code ?? null,
     type: inv.type,
     purchase_date: inv.purchase_date,
     units: inv.units,

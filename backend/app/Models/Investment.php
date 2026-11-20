@@ -12,6 +12,7 @@ class Investment extends Model
         'family_id',
         'name',
         'platform',
+        'asset_code',
         'type',
         'purchase_date',
         'units',

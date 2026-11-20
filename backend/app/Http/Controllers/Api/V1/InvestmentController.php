@@ -38,7 +38,13 @@ class InvestmentController extends ApiController
             return $this->error('Role Viewer tidak diizinkan menambahkan aset investasi.', 403);
         }
 
-        $totalCost = bcmul((string) $validated['units'], (string) $validated['buy_price_per_unit'], 2);
+        $unitsStr = InvestmentService::toDecimalString($validated['units'], 8);
+        $buyPriceStr = InvestmentService::toDecimalString($validated['buy_price_per_unit'], 4);
+        $marketPriceStr = InvestmentService::toDecimalString($validated['current_market_price'], 4);
+        $totalCost = bcmul($unitsStr, $buyPriceStr, 2);
+        $validated['units'] = $unitsStr;
+        $validated['buy_price_per_unit'] = $buyPriceStr;
+        $validated['current_market_price'] = $marketPriceStr;
 
         $investment = DB::transaction(function () use ($request, $validated, $familyId, $totalCost) {
             if (! empty($validated['source_account_id'])) {
@@ -89,14 +95,32 @@ class InvestmentController extends ApiController
             return $this->error('Akses ditolak.', 403);
         }
 
+        if (is_string($request->input('current_market_price'))) {
+            $request->merge([
+                'current_market_price' => StoreInvestmentRequest::normalizeFlexibleNumericString($request->input('current_market_price')),
+            ]);
+        }
+
+        $rawAssetCode = $request->input('asset_code');
+        if (is_string($rawAssetCode)) {
+            $cleanedCode = strtoupper(preg_replace('/\s+/', ' ', trim($rawAssetCode)) ?? '');
+            $request->merge(['asset_code' => $cleanedCode !== '' ? substr($cleanedCode, 0, 40) : null]);
+        }
+
         $validated = $request->validate([
             'current_market_price' => ['required', 'numeric', 'gte:0'],
+            'asset_code' => ['nullable', 'string', 'max:40'],
         ]);
 
-        $investment->update([
-            'current_market_price' => $validated['current_market_price'],
+        $updatePayload = [
+            'current_market_price' => InvestmentService::toDecimalString($validated['current_market_price'], 4),
             'price_source' => 'manual',
-        ]);
+        ];
+        if ($request->has('asset_code')) {
+            $updatePayload['asset_code'] = $validated['asset_code'] ?? null;
+        }
+
+        $investment->update($updatePayload);
 
         return $this->success('Harga pasar investasi berhasil diperbarui', $investment->fresh('transactions'));
     }
@@ -110,6 +134,12 @@ class InvestmentController extends ApiController
         $rawAccountId = $request->input('account_id');
         if ($rawAccountId === '' || $rawAccountId === 0 || $rawAccountId === '0') {
             $request->merge(['account_id' => null]);
+        }
+        foreach (['units', 'price_per_unit'] as $field) {
+            $val = $request->input($field);
+            if (is_string($val)) {
+                $request->merge([$field => StoreInvestmentRequest::normalizeFlexibleNumericString($val)]);
+            }
         }
 
         $validated = $request->validate([

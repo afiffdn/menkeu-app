@@ -13,12 +13,32 @@ class InvestmentService
 {
     public function __construct(private readonly TransactionService $transactionService) {}
 
+    public static function toDecimalString(mixed $value, int $scale = 8): string
+    {
+        if (is_int($value)) {
+            return (string) $value;
+        }
+        if (is_float($value)) {
+            $formatted = sprintf("%.{$scale}F", $value);
+            return str_contains($formatted, '.') ? rtrim(rtrim($formatted, '0'), '.') : $formatted;
+        }
+        $str = trim((string) $value);
+        if ($str === '') {
+            return '0';
+        }
+        if (stripos($str, 'e') !== false) {
+            $formatted = sprintf("%.{$scale}F", (float) $str);
+            return str_contains($formatted, '.') ? rtrim(rtrim($formatted, '0'), '.') : $formatted;
+        }
+        return $str;
+    }
+
     public function recordTransaction(User $user, Investment $investment, array $data): Investment
     {
         return DB::transaction(function () use ($user, $investment, $data) {
             $type = $data['type'];
-            $units = (string) $data['units'];
-            $price = (string) $data['price_per_unit'];
+            $units = self::toDecimalString($data['units'], 8);
+            $price = self::toDecimalString($data['price_per_unit'], 4);
             $total = $type === 'dividend' ? $price : bcmul($units, $price, 2);
 
             if ($type === 'buy') {

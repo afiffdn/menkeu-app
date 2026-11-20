@@ -176,6 +176,7 @@ export interface InvestmentRecord {
   family_id: number | null;
   name: string;
   platform: string;
+  asset_code?: string | null;
   type: InvestmentType;
   purchase_date: string;
   units: number;

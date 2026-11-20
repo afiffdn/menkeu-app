@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Pencil, Plus, TrendingUp } from 'lucide-react';
+import { ExternalLink, Pencil, Plus, TrendingUp } from 'lucide-react';
 import { usePeriod } from '../hooks/usePeriod';
 import { accountsApi, extractApiError, investmentsApi } from '../services/api';
-import type { Account, Investment } from '../types/finance';
+import type { Account, Investment, InvestmentType } from '../types/finance';
 import {
   formatDateID,
   formatIDR,
@@ -15,29 +15,66 @@ import {
   getTodayISO,
 } from '../utils/finance';
 import { Button, Card, EmptyState, ErrorBanner, Input, Modal, Select, StatCard } from '../components/ui/Primitives';
-import { optionalNullableIdSchema } from '../utils/formHelpers';
+import {
+  computeInvestmentPreview,
+  convertLotsToShares,
+  flexibleNonNegativeNumberSchema,
+  flexiblePositiveNumberSchema,
+  formatSharesWithLots,
+  normalizeAssetCode,
+  optionalNullableIdSchema,
+  parseFlexibleNumber,
+} from '../utils/formHelpers';
+
+const OFFICIAL_PRICE_PORTALS: Array<{
+  label: string;
+  url: string;
+  types: InvestmentType[];
+}> = [
+  {
+    label: 'Logam Mulia Antam',
+    url: 'https://www.logammulia.com/id/harga-emas-hari-ini',
+    types: ['digital_gold'],
+  },
+  {
+    label: 'Pegadaian Emas',
+    url: 'https://www.pegadaian.co.id/harga-emas',
+    types: ['digital_gold'],
+  },
+  {
+    label: 'BEI / IDX',
+    url: 'https://www.idx.co.id',
+    types: ['stock', 'mutual_fund'],
+  },
+  {
+    label: 'PHEI Obligasi & SBN',
+    url: 'https://www.phei.co.id',
+    types: ['bond'],
+  },
+];
 
 const createSchema = z.object({
   name: z.string().min(2, 'Nama aset wajib diisi'),
   platform: z.string().min(2, 'Platform wajib diisi'),
-  type: z.enum(['digital_gold', 'mutual_fund', 'stock', 'deposit', 'other']),
+  asset_code: z.string().max(40, 'Maksimal 40 karakter').optional(),
+  type: z.enum(['digital_gold', 'mutual_fund', 'stock', 'bond', 'deposit', 'other']),
   purchase_date: z.string().min(1),
-  units: z.coerce.number().positive('Jumlah unit/gram harus > 0'),
+  units: flexiblePositiveNumberSchema('Jumlah unit/gram harus > 0'),
   unit_label: z.string().min(1),
-  buy_price_per_unit: z.coerce.number().positive('Harga beli wajib > 0'),
-  current_market_price: z.coerce.number().positive('Harga pasar wajib > 0'),
+  buy_price_per_unit: flexiblePositiveNumberSchema('Harga beli wajib > 0'),
+  current_market_price: flexiblePositiveNumberSchema('Harga pasar wajib > 0'),
   space: z.enum(['pribadi', 'keluarga', 'anak']),
   source_account_id: optionalNullableIdSchema,
 });
 
 const priceSchema = z.object({
-  current_market_price: z.coerce.number().positive('Harga pasar harus lebih dari 0'),
+  current_market_price: flexiblePositiveNumberSchema('Harga pasar harus lebih dari 0'),
 });
 
 const txSchema = z.object({
   type: z.enum(['buy', 'sell', 'dividend']),
-  units: z.coerce.number().min(0, 'Jumlah unit minimal 0'),
-  price_per_unit: z.coerce.number().positive('Nominal / harga wajib > 0'),
+  units: flexibleNonNegativeNumberSchema('Jumlah unit minimal 0'),
+  price_per_unit: flexiblePositiveNumberSchema('Nominal / harga wajib > 0'),
   account_id: optionalNullableIdSchema,
   transaction_date: z.string().min(1),
   notes: z.string().optional(),
@@ -54,12 +91,14 @@ export function InvestmentsPage() {
   const [editingPrice, setEditingPrice] = useState<Investment | null>(null);
   const [transactingInv, setTransactingInv] = useState<Investment | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
+  const [lotHelperInput, setLotHelperInput] = useState('');
 
   const createForm = useForm<z.input<typeof createSchema>, unknown, z.output<typeof createSchema>>({
     resolver: zodResolver(createSchema),
     defaultValues: {
       name: '',
       platform: '',
+      asset_code: '',
       type: 'digital_gold',
       purchase_date: getTodayISO(),
       units: 5,
@@ -87,9 +126,41 @@ export function InvestmentsPage() {
   });
 
   const invType = createForm.watch('type');
+  const createUnitsWatch = createForm.watch('units');
+  const createUnitLabelWatch = createForm.watch('unit_label');
+  const createBuyPriceWatch = createForm.watch('buy_price_per_unit');
+  const createMarketPriceWatch = createForm.watch('current_market_price');
+
+  const createPreview = computeInvestmentPreview(
+    createUnitsWatch,
+    createBuyPriceWatch,
+    createMarketPriceWatch
+  );
+
+  const editMarketPriceWatch = priceForm.watch('current_market_price');
+  const parsedEditMarketPrice = parseFlexibleNumber(editMarketPriceWatch);
+
+  const txTypeWatch = txForm.watch('type');
+  const txUnitsWatch = txForm.watch('units');
+  const txPriceWatch = txForm.watch('price_per_unit');
+  const parsedTxUnits = parseFlexibleNumber(txUnitsWatch);
+  const parsedTxPrice = parseFlexibleNumber(txPriceWatch);
+  const estimatedTxTotal =
+    txTypeWatch === 'dividend'
+      ? Number.isFinite(parsedTxPrice) && parsedTxPrice > 0
+        ? parsedTxPrice
+        : 0
+      : Number.isFinite(parsedTxUnits) &&
+          parsedTxUnits > 0 &&
+          Number.isFinite(parsedTxPrice) &&
+          parsedTxPrice > 0
+        ? Math.round(parsedTxUnits * parsedTxPrice * 100) / 100
+        : 0;
+
   useEffect(() => {
     if (invType === 'digital_gold') createForm.setValue('unit_label', 'gram');
     else if (invType === 'stock') createForm.setValue('unit_label', 'lembar');
+    else if (invType === 'deposit') createForm.setValue('unit_label', 'bilyet');
     else createForm.setValue('unit_label', 'unit');
   }, [invType, createForm]);
 
@@ -116,12 +187,15 @@ export function InvestmentsPage() {
     try {
       await investmentsApi.create({
         ...values,
+        asset_code: normalizeAssetCode(values.asset_code),
         source_account_id: values.source_account_id ?? null,
       });
       setCreateOpen(false);
+      setLotHelperInput('');
       createForm.reset({
         name: '',
         platform: '',
+        asset_code: '',
         type: 'digital_gold',
         purchase_date: getTodayISO(),
         units: 5,
@@ -164,25 +238,41 @@ export function InvestmentsPage() {
     }
   };
 
-  const totalCost = investments.reduce((s, i) => s + i.total_cost, 0);
-  const totalValue = investments.reduce((s, i) => s + i.current_value, 0);
+  const totalCost = investments.reduce((s, i) => s + Number(i.total_cost || 0), 0);
+  const totalValue = investments.reduce((s, i) => s + Number(i.current_value || 0), 0);
   const totalPL = totalValue - totalCost;
   const totalPLPct = totalCost > 0 ? Math.round((totalPL / totalCost) * 10000) / 100 : 0;
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
         <div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
             Investasi & Emas Digital
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5">
-            Harga pasar terbaru menggunakan input manual terstruktur dan siap diintegrasikan ke API penyedia harga.
+            Pencatatan manual terstruktur agar nilai portofolio 100% sesuai akun investasi asli Anda.
           </p>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1.5 text-[11px] text-slate-500">
+            <span>Cek harga resmi:</span>
+            {OFFICIAL_PRICE_PORTALS.map((portal) => (
+              <a
+                key={portal.url}
+                href={portal.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 hover:underline font-medium"
+              >
+                {portal.label}
+                <ExternalLink className="w-3 h-3" />
+              </a>
+            ))}
+          </div>
         </div>
 
         <Button
           size="sm"
+          className="shrink-0"
           onClick={() => {
             setModalError(null);
             setCreateOpen(true);
@@ -210,10 +300,10 @@ export function InvestmentsPage() {
         <Card className="p-8 text-center text-xs text-slate-500">Memuat portofolio investasi...</Card>
       ) : investments.length === 0 ? (
         <Card>
-          <EmptyState
+            <EmptyState
             icon={<TrendingUp className="w-5 h-5" />}
             title="Belum ada aset investasi"
-            description="Catat kepemilikan emas digital (gram), reksa dana, saham, atau deposito keluarga Anda."
+            description="Catat kepemilikan emas digital (gram), saham, reksa dana, obligasi/SBN, atau deposito keluarga Anda."
             actionLabel="Tambah Investasi Pertama"
             onAction={() => {
               setModalError(null);
@@ -224,59 +314,74 @@ export function InvestmentsPage() {
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {investments.map((inv) => {
-            const isGain = inv.profit_loss >= 0;
+            const unitsNum = Number(inv.units || 0);
+            const profitLossNum = Number(inv.profit_loss || 0);
+            const profitLossPctNum = Number(inv.profit_loss_percentage || 0);
+            const isGain = profitLossNum >= 0;
             return (
-              <Card key={inv.id} className="p-5 space-y-4">
+              <Card key={inv.id} className="p-5 space-y-4 min-w-0">
                 <div className="flex items-start justify-between gap-3">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-xs text-slate-500">
                       {getInvestmentTypeLabel(inv.type)} · {inv.platform} · {getSpaceLabel(inv.space)}
                     </p>
-                    <h2 className="text-base font-semibold text-slate-900 mt-0.5">{inv.name}</h2>
+                    <h2 className="text-base font-semibold text-slate-900 mt-0.5 break-words">
+                      {inv.name}
+                      {inv.asset_code && (
+                        <span className="inline-block ml-2 px-1.5 py-0.5 text-[11px] font-mono font-medium bg-slate-100 text-slate-700 rounded border border-slate-200 align-middle">
+                          {inv.asset_code}
+                        </span>
+                      )}
+                    </h2>
                   </div>
                   <span
-                    className={`text-xs font-mono font-semibold ${
+                    className={`text-xs font-mono font-semibold shrink-0 ${
                       isGain ? 'text-emerald-700' : 'text-red-600'
                     }`}
                   >
                     {isGain ? '+' : ''}
-                    {inv.profit_loss_percentage}%
+                    {profitLossPctNum}%
                   </span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs pt-2 border-t border-slate-100">
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-slate-500">Kepemilikan</p>
-                    <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
-                      {formatNumberID(inv.units, 8)} {inv.unit_label}
+                    <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5 break-words">
+                      {formatNumberID(unitsNum, 8)} {inv.unit_label}
                     </p>
+                    {inv.type === 'stock' && inv.unit_label.toLowerCase() === 'lembar' && formatSharesWithLots(unitsNum) && (
+                      <p className="text-[11px] text-slate-400 font-mono tabular-nums mt-0.5">
+                        ({formatSharesWithLots(unitsNum)})
+                      </p>
+                    )}
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-slate-500">Harga Beli Rata-rata</p>
-                    <p className="font-mono tabular-nums font-medium text-slate-900 mt-0.5">
+                    <p className="font-mono tabular-nums font-medium text-slate-900 mt-0.5 break-words">
                       {formatIDR(inv.buy_price_per_unit)}/{inv.unit_label}
                     </p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-slate-500">Harga Pasar (Manual)</p>
-                    <p className="font-mono tabular-nums font-medium text-slate-900 mt-0.5">
+                    <p className="font-mono tabular-nums font-medium text-slate-900 mt-0.5 break-words">
                       {formatIDR(inv.current_market_price)}/{inv.unit_label}
                     </p>
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <p className="text-slate-500">Nilai Terkini</p>
-                    <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
+                    <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5 break-words">
                       {formatIDR(inv.current_value)}
                     </p>
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100 text-xs">
-                  <span className="text-slate-500">
+                  <span className="text-slate-500 break-words">
                     Modal: <strong className="font-mono text-slate-800">{formatIDR(inv.total_cost)}</strong> · P/L:{' '}
                     <strong className={`font-mono ${isGain ? 'text-emerald-700' : 'text-red-600'}`}>
                       {isGain ? '+' : ''}
-                      {formatIDR(inv.profit_loss)}
+                      {formatIDR(profitLossNum)}
                     </strong>
                   </span>
                   <div className="flex items-center gap-2">
@@ -286,7 +391,7 @@ export function InvestmentsPage() {
                       onClick={() => {
                         setModalError(null);
                         setEditingPrice(inv);
-                        priceForm.setValue('current_market_price', inv.current_market_price);
+                        priceForm.setValue('current_market_price', Number(inv.current_market_price));
                       }}
                     >
                       <Pencil className="w-3.5 h-3.5" />
@@ -300,7 +405,7 @@ export function InvestmentsPage() {
                         txForm.reset({
                           type: 'buy',
                           units: 1,
-                          price_per_unit: inv.current_market_price,
+                          price_per_unit: Number(inv.current_market_price),
                           account_id: accounts[0]?.id ?? null,
                           transaction_date: getTodayISO(),
                           notes: '',
@@ -339,15 +444,22 @@ export function InvestmentsPage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label="Nama Aset"
-              placeholder="Contoh: Emas Antam Digital"
+              placeholder={
+                invType === 'bond'
+                  ? 'Contoh: ORI026-T3 / Sukuk Ritel SR021'
+                  : invType === 'stock'
+                    ? 'Contoh: Saham Bank Central Asia'
+                    : 'Contoh: Emas Antam Digital'
+              }
               error={createForm.formState.errors.name?.message}
               {...createForm.register('name')}
             />
             <Input
-              label="Platform"
-              placeholder="Contoh: Pegadaian / Bibit / Stockbit"
-              error={createForm.formState.errors.platform?.message}
-              {...createForm.register('platform')}
+              label="Kode Ticker / Seri (Opsional)"
+              placeholder="Contoh: BBCA, ORI026, SR021, RDPU"
+              className="font-mono uppercase"
+              error={createForm.formState.errors.asset_code?.message}
+              {...createForm.register('asset_code')}
             />
           </div>
 
@@ -356,30 +468,24 @@ export function InvestmentsPage() {
               <option value="digital_gold">Emas Digital (gram)</option>
               <option value="mutual_fund">Reksa Dana</option>
               <option value="stock">Saham</option>
+              <option value="bond">Obligasi / SBN</option>
               <option value="deposit">Deposito</option>
               <option value="other">Investasi Lainnya</option>
             </Select>
+            <Input
+              label="Platform"
+              placeholder="Contoh: Pegadaian / Bibit / Stockbit / Bareksa"
+              error={createForm.formState.errors.platform?.message}
+              {...createForm.register('platform')}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label="Tanggal Pembelian"
               type="date"
               error={createForm.formState.errors.purchase_date?.message}
               {...createForm.register('purchase_date')}
-            />
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <Input
-              label="Jumlah (Unit/Gram)"
-              type="number"
-              step="any"
-              className="font-mono tabular-nums"
-              error={createForm.formState.errors.units?.message}
-              {...createForm.register('units')}
-            />
-            <Input
-              label="Satuan"
-              error={createForm.formState.errors.unit_label?.message}
-              {...createForm.register('unit_label')}
             />
             <Select label="Ruang" {...createForm.register('space')}>
               <option value="keluarga">Keluarga</option>
@@ -389,23 +495,155 @@ export function InvestmentsPage() {
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input
-              label="Harga Beli per Satuan (Rp)"
-              type="number"
-              step="any"
-              className="font-mono tabular-nums"
-              error={createForm.formState.errors.buy_price_per_unit?.message}
-              {...createForm.register('buy_price_per_unit')}
-            />
-            <Input
-              label="Harga Pasar Saat Ini (Rp)"
-              type="number"
-              step="any"
-              className="font-mono tabular-nums"
-              error={createForm.formState.errors.current_market_price?.message}
-              {...createForm.register('current_market_price')}
-            />
+            <div>
+              <Input
+                label="Jumlah (Unit/Gram)"
+                type="text"
+                inputMode="decimal"
+                placeholder={
+                  invType === 'stock'
+                    ? 'Contoh: 100000 atau 100.000.000'
+                    : invType === 'digital_gold'
+                      ? 'Contoh: 2.661654'
+                      : invType === 'bond'
+                        ? 'Contoh: 50 (untuk Rp50 juta SBN)'
+                        : 'Contoh: 12500.5'
+                }
+                className="font-mono tabular-nums"
+                error={createForm.formState.errors.units?.message}
+                {...createForm.register('units')}
+              />
+              {Number.isFinite(createPreview.units) && createPreview.units > 0 && (
+                <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums break-words">
+                  = {formatNumberID(createPreview.units, 8)} {createUnitLabelWatch || 'unit'}
+                  {invType === 'stock' &&
+                    (createUnitLabelWatch || '').toLowerCase() === 'lembar' &&
+                    formatSharesWithLots(createPreview.units) && (
+                      <> ({formatSharesWithLots(createPreview.units)})</>
+                    )}
+                </p>
+              )}
+            </div>
+            <div>
+              <Input
+                label="Satuan"
+                error={createForm.formState.errors.unit_label?.message}
+                {...createForm.register('unit_label')}
+              />
+              {invType === 'stock' && (
+                <p className="text-[11px] text-slate-400 mt-1">BEI: 1 lot = 100 lembar</p>
+              )}
+            </div>
           </div>
+
+          {invType === 'stock' && (
+            <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <span className="text-slate-600">
+                Punya jumlah dalam <strong>Lot BEI</strong>? (1 lot = 100 lembar)
+              </span>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  aria-label="Jumlah Lot BEI"
+                  placeholder="Misal: 1000"
+                  value={lotHelperInput}
+                  onChange={(e) => setLotHelperInput(e.target.value)}
+                  className="w-28 h-8 px-2.5 text-xs font-mono bg-white border border-slate-200 rounded-md text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-600/20 focus:border-emerald-600"
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const shares = convertLotsToShares(lotHelperInput);
+                    if (shares > 0) {
+                      createForm.setValue('units', shares, { shouldValidate: true });
+                      createForm.setValue('unit_label', 'lembar', { shouldValidate: true });
+                    }
+                  }}
+                >
+                  Konversi ke Lembar
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {invType === 'digital_gold' && (
+            <p className="text-[11px] text-slate-400 -mt-1">
+              Standar Pegadaian / Pluang mendukung pecahan emas digital mulai 0,01 gram dengan presisi hingga 4–8 desimal.
+            </p>
+          )}
+          {invType === 'mutual_fund' && (
+            <p className="text-[11px] text-slate-400 -mt-1">
+              Standar OJK (POJK 56/2020): Unit Penyertaan &amp; NAB/UP mendukung pencatatan hingga 4+ angka desimal.
+            </p>
+          )}
+          {invType === 'bond' && (
+            <p className="text-[11px] text-slate-400 -mt-1">
+              SBN Ritel (ORI/SR/SBR/ST): umumnya 1 unit = Rp1.000.000; untuk obligasi pasar sekunder isi harga pasar per unit saat ini.
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <Input
+                label={
+                  invType === 'mutual_fund'
+                    ? 'NAB Beli per unit (Rp)'
+                    : `Harga Beli per ${createUnitLabelWatch || 'satuan'} (Rp)`
+                }
+                type="text"
+                inputMode="decimal"
+                placeholder="Contoh: 5000 atau 2.195.211"
+                className="font-mono tabular-nums"
+                error={createForm.formState.errors.buy_price_per_unit?.message}
+                {...createForm.register('buy_price_per_unit')}
+              />
+              {Number.isFinite(createPreview.buyPrice) && createPreview.buyPrice > 0 && (
+                <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums break-words">
+                  = {formatIDR(createPreview.buyPrice)}
+                </p>
+              )}
+            </div>
+            <div>
+              <Input
+                label={
+                  invType === 'mutual_fund'
+                    ? 'NAB Pasar Saat Ini (Rp)'
+                    : `Harga Pasar per ${createUnitLabelWatch || 'satuan'} (Rp)`
+                }
+                type="text"
+                inputMode="decimal"
+                placeholder="Contoh: 5250 atau 2.195.211"
+                className="font-mono tabular-nums"
+                error={createForm.formState.errors.current_market_price?.message}
+                {...createForm.register('current_market_price')}
+              />
+              {Number.isFinite(createPreview.marketPrice) && createPreview.marketPrice > 0 && (
+                <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums break-words">
+                  = {formatIDR(createPreview.marketPrice)}
+                </p>
+              )}
+            </div>
+          </div>
+
+          {createPreview.valid && (
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 grid grid-cols-2 gap-3 text-xs">
+              <div className="min-w-0">
+                <p className="text-slate-500">Estimasi Total Modal</p>
+                <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5 break-words">
+                  {formatIDR(createPreview.totalCost)}
+                </p>
+              </div>
+              <div className="min-w-0">
+                <p className="text-slate-500">Estimasi Nilai Kini</p>
+                <p className="font-mono tabular-nums font-semibold text-emerald-700 mt-0.5 break-words">
+                  {formatIDR(createPreview.currentValue)}
+                </p>
+              </div>
+            </div>
+          )}
 
           <Select
             label="Potong Saldo dari Akun (Opsional)"
@@ -455,14 +693,38 @@ export function InvestmentsPage() {
               {modalError}
             </div>
           )}
-          <Input
-            label={`Harga Pasar Terbaru per ${editingPrice?.unit_label || 'unit'} (Rp)`}
-            type="number"
-            step="any"
-            className="font-mono tabular-nums"
-            error={priceForm.formState.errors.current_market_price?.message}
-            {...priceForm.register('current_market_price')}
-          />
+          <div>
+            <Input
+              label={`Harga Pasar Terbaru per ${editingPrice?.unit_label || 'unit'} (Rp)`}
+              type="text"
+              inputMode="decimal"
+              className="font-mono tabular-nums"
+              error={priceForm.formState.errors.current_market_price?.message}
+              {...priceForm.register('current_market_price')}
+            />
+            {Number.isFinite(parsedEditMarketPrice) && parsedEditMarketPrice > 0 && (
+              <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums break-words">
+                = {formatIDR(parsedEditMarketPrice)}/{editingPrice?.unit_label || 'unit'}
+              </p>
+            )}
+          </div>
+          {editingPrice && OFFICIAL_PRICE_PORTALS.some((p) => p.types.includes(editingPrice.type)) && (
+            <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-slate-600 flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span>Referensi resmi:</span>
+              {OFFICIAL_PRICE_PORTALS.filter((p) => p.types.includes(editingPrice.type)).map((portal) => (
+                <a
+                  key={portal.url}
+                  href={portal.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 text-emerald-700 hover:text-emerald-800 hover:underline font-medium"
+                >
+                  {portal.label}
+                  <ExternalLink className="w-3 h-3" />
+                </a>
+              ))}
+            </div>
+          )}
           <div className="flex justify-end gap-2 pt-2">
             <Button
               type="button"
@@ -499,26 +761,54 @@ export function InvestmentsPage() {
           <Select label="Jenis Aksi" {...txForm.register('type')}>
             <option value="buy">Beli / Top-Up Unit</option>
             <option value="sell">Jual Unit</option>
-            <option value="dividend">Dividen / Imbal Hasil</option>
+            <option value="dividend">Dividen / Kupon / Imbal Hasil</option>
           </Select>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Input
-              label={`Jumlah ${transactingInv?.unit_label || 'Unit'}`}
-              type="number"
-              step="any"
-              className="font-mono tabular-nums"
-              error={txForm.formState.errors.units?.message}
-              {...txForm.register('units')}
-            />
-            <Input
-              label="Harga per Unit / Nominal Dividen (Rp)"
-              type="number"
-              step="any"
-              className="font-mono tabular-nums"
-              error={txForm.formState.errors.price_per_unit?.message}
-              {...txForm.register('price_per_unit')}
-            />
+            <div>
+              <Input
+                label={`Jumlah ${transactingInv?.unit_label || 'Unit'}`}
+                type="text"
+                inputMode="decimal"
+                placeholder="Contoh: 100.000 atau 0.123456"
+                className="font-mono tabular-nums"
+                error={txForm.formState.errors.units?.message}
+                {...txForm.register('units')}
+              />
+              {Number.isFinite(parsedTxUnits) && parsedTxUnits >= 0 && (
+                <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums break-words">
+                  = {formatNumberID(parsedTxUnits, 8)} {transactingInv?.unit_label || 'unit'}
+                </p>
+              )}
+            </div>
+            <div>
+              <Input
+                label={
+                  txTypeWatch === 'dividend'
+                    ? 'Nominal Dividen / Kupon (Rp)'
+                    : 'Harga per Unit / Satuan (Rp)'
+                }
+                type="text"
+                inputMode="decimal"
+                placeholder="Contoh: 5.000"
+                className="font-mono tabular-nums"
+                error={txForm.formState.errors.price_per_unit?.message}
+                {...txForm.register('price_per_unit')}
+              />
+              {Number.isFinite(parsedTxPrice) && parsedTxPrice > 0 && (
+                <p className="text-[11px] text-slate-500 mt-1 font-mono tabular-nums break-words">
+                  = {formatIDR(parsedTxPrice)}
+                </p>
+              )}
+            </div>
           </div>
+          {estimatedTxTotal > 0 && (
+            <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between gap-2 text-xs">
+              <span className="text-slate-500">Estimasi Total Transaksi</span>
+              <span className="font-mono tabular-nums font-semibold text-slate-900 break-words">
+                {formatIDR(estimatedTxTotal)}
+              </span>
+            </div>
+          )}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Select
               label="Akun Kas Terkait"

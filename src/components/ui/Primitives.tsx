@@ -316,9 +316,9 @@ export function StatCard({
   }[tone];
 
   return (
-    <Card className="p-5">
+    <Card className="p-5 min-w-0">
       <p className="text-xs font-medium text-slate-500">{label}</p>
-      <p className={cn('text-xl font-semibold tracking-tight tabular-nums font-mono mt-2', toneColor)}>
+      <p className={cn('text-lg sm:text-xl font-semibold tracking-tight tabular-nums font-mono mt-2 break-words', toneColor)}>
         {value}
       </p>
       {subtext && <p className="text-xs text-slate-500 mt-1.5 truncate">{subtext}</p>}

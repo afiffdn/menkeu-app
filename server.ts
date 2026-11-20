@@ -36,7 +36,7 @@ import {
 import { hashPassword, verifyPassword } from './server/seed';
 import { getDbState, mutateDb } from './server/store';
 import type { DashboardFilters, FamilyRole, SpaceType } from './src/types/finance';
-import { parseOptionalId, roundToPrecision } from './src/utils/formHelpers';
+import { parseFlexibleNumber, parseOptionalId, roundToPrecision } from './src/utils/formHelpers';
 
 interface AuthedRequest extends Request {
   userId?: number;
@@ -1202,9 +1202,28 @@ async function bootstrapServer() {
   });
 
   api.post('/investments', requireAuth, (req: AuthedRequest, res) => {
-    const { name, platform, type, purchase_date, units, unit_label, buy_price_per_unit, current_market_price, space, source_account_id } = req.body ?? {};
-    const qty = roundToPrecision(Number(units), 8);
-    const buyPrice = Number(buy_price_per_unit);
+    const {
+      name,
+      platform,
+      asset_code,
+      type,
+      purchase_date,
+      units,
+      unit_label,
+      buy_price_per_unit,
+      current_market_price,
+      space,
+      source_account_id,
+    } = req.body ?? {};
+    const allowedTypes = ['digital_gold', 'mutual_fund', 'stock', 'bond', 'deposit', 'other'];
+    const normalizedType = typeof type === 'string' && allowedTypes.includes(type) ? type : 'digital_gold';
+    const normalizedCode =
+      typeof asset_code === 'string' && asset_code.trim().length > 0
+        ? asset_code.trim().replace(/\s+/g, ' ').toUpperCase().slice(0, 40)
+        : null;
+    const qty = roundToPrecision(parseFlexibleNumber(units), 8);
+    const buyPrice = parseFlexibleNumber(buy_price_per_unit);
+    const parsedMarketPrice = parseFlexibleNumber(current_market_price);
     const sourceAccountId = parseOptionalId(source_account_id);
     if (!name || !platform || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(buyPrice) || buyPrice <= 0) {
       return sendError(res, 'Validasi gagal', 422, { name: ['Lengkapi nama aset, platform, jumlah unit, dan harga beli.'] });
@@ -1243,13 +1262,14 @@ async function bootstrapServer() {
           family_id: famId,
           name: String(name).trim(),
           platform: String(platform).trim(),
-          type: type || 'digital_gold',
+          asset_code: normalizedCode,
+          type: normalizedType as any,
           purchase_date: purchase_date || getNowTodayISO(),
           units: qty,
-          unit_label: unit_label || (type === 'digital_gold' ? 'gram' : 'unit'),
+          unit_label: unit_label || (normalizedType === 'digital_gold' ? 'gram' : 'unit'),
           buy_price_per_unit: buyPrice,
           total_cost: totalCost,
-          current_market_price: Number(current_market_price) || buyPrice,
+          current_market_price: Number.isFinite(parsedMarketPrice) && parsedMarketPrice >= 0 ? parsedMarketPrice : buyPrice,
           space: (space || 'keluarga') as SpaceType,
           price_source: 'manual',
           updated_at: now,
@@ -1288,18 +1308,25 @@ async function bootstrapServer() {
 
   api.put('/investments/:id', requireAuth, (req: AuthedRequest, res) => {
     const id = Number(req.params.id);
-    const { current_market_price, platform, name } = req.body ?? {};
+    const { current_market_price, platform, name, asset_code } = req.body ?? {};
     try {
       const updated = mutateDb((state) => {
         const inv = state.investments.find((i) => i.id === id);
         if (!inv) throw new DomainError('Investasi tidak ditemukan.', 404);
         if (!canWriteRecord(state, req.userId!, inv)) throw new DomainError('Akses ditolak.', 403);
-        if (current_market_price !== undefined && Number(current_market_price) >= 0) {
-          inv.current_market_price = Number(current_market_price);
+        const parsedMarket = parseFlexibleNumber(current_market_price);
+        if (current_market_price !== undefined && Number.isFinite(parsedMarket) && parsedMarket >= 0) {
+          inv.current_market_price = parsedMarket;
           inv.price_source = 'manual';
         }
         if (platform) inv.platform = String(platform).trim();
         if (name) inv.name = String(name).trim();
+        if (asset_code !== undefined) {
+          inv.asset_code =
+            typeof asset_code === 'string' && asset_code.trim().length > 0
+              ? asset_code.trim().replace(/\s+/g, ' ').toUpperCase().slice(0, 40)
+              : null;
+        }
         inv.updated_at = new Date().toISOString();
         return hydrateInvestment(state, id);
       });
@@ -1313,8 +1340,8 @@ async function bootstrapServer() {
   api.post('/investments/:id/transactions', requireAuth, (req: AuthedRequest, res) => {
     const id = Number(req.params.id);
     const { type, units, price_per_unit, account_id, transaction_date, notes } = req.body ?? {};
-    const qty = roundToPrecision(Number(units), 8);
-    const price = Number(price_per_unit);
+    const qty = roundToPrecision(parseFlexibleNumber(units), 8);
+    const price = parseFlexibleNumber(price_per_unit);
     const normalizedAccountId = parseOptionalId(account_id);
     if (!['buy', 'sell', 'dividend'].includes(type) || !Number.isFinite(qty) || qty < 0 || !Number.isFinite(price) || price <= 0) {
       return sendError(res, 'Validasi transaksi investasi gagal.', 422);

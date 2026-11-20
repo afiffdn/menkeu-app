@@ -14,6 +14,7 @@ export type InvestmentType =
   | 'digital_gold'
   | 'mutual_fund'
   | 'stock'
+  | 'bond'
   | 'deposit'
   | 'other';
 
@@ -246,6 +247,7 @@ export interface Investment {
   family_id: number | null;
   name: string;
   platform: string;
+  asset_code?: string | null;
   type: InvestmentType;
   purchase_date: string;
   units: number;

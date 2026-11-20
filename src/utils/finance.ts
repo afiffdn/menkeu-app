@@ -26,6 +26,9 @@ export function formatIDR(amount: number | string | null | undefined): string {
 export function formatIDRCompact(amount: number): string {
   const abs = Math.abs(amount);
   const sign = amount < 0 ? '-' : '';
+  if (abs >= 1_000_000_000_000) {
+    return `${sign}Rp${(abs / 1_000_000_000_000).toFixed(1).replace('.', ',')}T`;
+  }
   if (abs >= 1_000_000_000) {
     return `${sign}Rp${(abs / 1_000_000_000).toFixed(1).replace('.', ',')}M`;
   }
@@ -158,6 +161,7 @@ export function getInvestmentTypeLabel(type: InvestmentType): string {
     digital_gold: 'Emas Digital',
     mutual_fund: 'Reksa Dana',
     stock: 'Saham',
+    bond: 'Obligasi / SBN',
     deposit: 'Deposito',
     other: 'Lainnya',
   };
