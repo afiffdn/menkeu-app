@@ -7,14 +7,15 @@ import { accountsApi, categoriesApi, extractApiError, transactionsApi } from '..
 import type { Account, Category, SpaceType, Transaction, TransactionType } from '../../types/finance';
 import { formatIDR, generateIdempotencyKey, getTodayISO } from '../../utils/finance';
 import { Button, Input, Modal, Select, Textarea } from '../ui/Primitives';
+import { optionalNullableIdSchema } from '../../utils/formHelpers';
 
 const transactionSchema = z
   .object({
     type: z.enum(['income', 'expense', 'transfer']),
     transaction_date: z.string().min(1, 'Tanggal wajib diisi'),
     account_id: z.coerce.number().min(1, 'Akun asal wajib dipilih'),
-    to_account_id: z.coerce.number().optional().nullable(),
-    category_id: z.coerce.number().optional().nullable(),
+    to_account_id: optionalNullableIdSchema,
+    category_id: optionalNullableIdSchema,
     amount: z.coerce.number().positive('Nominal harus lebih besar dari Rp0'),
     space: z.enum(['pribadi', 'keluarga', 'anak']),
     notes: z.string().optional(),

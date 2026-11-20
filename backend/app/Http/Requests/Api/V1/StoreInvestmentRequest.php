@@ -12,6 +12,14 @@ class StoreInvestmentRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $sourceAccountId = $this->input('source_account_id');
+        if ($sourceAccountId === '' || $sourceAccountId === 0 || $sourceAccountId === '0') {
+            $this->merge(['source_account_id' => null]);
+        }
+    }
+
     public function rules(): array
     {
         return [

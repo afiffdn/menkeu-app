@@ -36,6 +36,7 @@ import {
 import { hashPassword, verifyPassword } from './server/seed';
 import { getDbState, mutateDb } from './server/store';
 import type { DashboardFilters, FamilyRole, SpaceType } from './src/types/finance';
+import { parseOptionalId, roundToPrecision } from './src/utils/formHelpers';
 
 interface AuthedRequest extends Request {
   userId?: number;
@@ -1202,29 +1203,32 @@ async function bootstrapServer() {
 
   api.post('/investments', requireAuth, (req: AuthedRequest, res) => {
     const { name, platform, type, purchase_date, units, unit_label, buy_price_per_unit, current_market_price, space, source_account_id } = req.body ?? {};
-    if (!name || !platform || Number(units) <= 0 || Number(buy_price_per_unit) <= 0) {
+    const qty = roundToPrecision(Number(units), 8);
+    const buyPrice = Number(buy_price_per_unit);
+    const sourceAccountId = parseOptionalId(source_account_id);
+    if (!name || !platform || !Number.isFinite(qty) || qty <= 0 || !Number.isFinite(buyPrice) || buyPrice <= 0) {
       return sendError(res, 'Validasi gagal', 422, { name: ['Lengkapi nama aset, platform, jumlah unit, dan harga beli.'] });
     }
     try {
       const created = mutateDb((state) => {
         const id = nextId(state, 'investments');
         const famId = getUserFamilyIds(state, req.userId!)[0] ?? null;
-        const qty = Number(units);
-        const buyPrice = Number(buy_price_per_unit);
         const totalCost = Math.round(qty * buyPrice * 100) / 100;
         const now = new Date().toISOString();
 
         // Buying an investment moves cash from source account without counting as consumptive expense
-        if (source_account_id) {
-          const src = state.accounts.find((a) => a.id === Number(source_account_id) && !a.deleted_at);
-          if (!src) throw new DomainError('Akun sumber tidak ditemukan.', 404);
+        if (sourceAccountId) {
+          const src = state.accounts.find((a) => a.id === sourceAccountId && !a.deleted_at);
+          if (!src || !canViewRecord(state, req.userId!, src)) {
+            throw new DomainError('Akun sumber tidak ditemukan.', 404);
+          }
           if (src.current_balance < totalCost) {
             throw new DomainError('Saldo akun sumber tidak mencukupi untuk pembelian investasi.', 422);
           }
           createTransaction(state, req.userId!, {
             type: 'expense',
             category_id: 18,
-            account_id: Number(source_account_id),
+            account_id: sourceAccountId,
             amount: totalCost,
             space: (space || 'keluarga') as SpaceType,
             transaction_date: purchase_date || getNowTodayISO(),
@@ -1256,7 +1260,7 @@ async function bootstrapServer() {
           investment_id: id,
           user_id: req.userId!,
           type: 'buy',
-          account_id: source_account_id ? Number(source_account_id) : null,
+          account_id: sourceAccountId,
           units: qty,
           price_per_unit: buyPrice,
           total_amount: totalCost,
@@ -1309,7 +1313,10 @@ async function bootstrapServer() {
   api.post('/investments/:id/transactions', requireAuth, (req: AuthedRequest, res) => {
     const id = Number(req.params.id);
     const { type, units, price_per_unit, account_id, transaction_date, notes } = req.body ?? {};
-    if (!['buy', 'sell', 'dividend'].includes(type) || Number(units) < 0 || Number(price_per_unit) <= 0) {
+    const qty = roundToPrecision(Number(units), 8);
+    const price = Number(price_per_unit);
+    const normalizedAccountId = parseOptionalId(account_id);
+    if (!['buy', 'sell', 'dividend'].includes(type) || !Number.isFinite(qty) || qty < 0 || !Number.isFinite(price) || price <= 0) {
       return sendError(res, 'Validasi transaksi investasi gagal.', 422);
     }
     try {
@@ -1318,16 +1325,14 @@ async function bootstrapServer() {
         if (!inv) throw new DomainError('Investasi tidak ditemukan.', 404);
         if (!canWriteRecord(state, req.userId!, inv)) throw new DomainError('Akses ditolak.', 403);
 
-        const qty = Number(units);
-        const price = Number(price_per_unit);
         const total = type === 'dividend' ? price : Math.round(qty * price * 100) / 100;
 
         if (type === 'buy') {
-          if (account_id) {
+          if (normalizedAccountId) {
             createTransaction(state, req.userId!, {
               type: 'expense',
               category_id: 18,
-              account_id: Number(account_id),
+              account_id: normalizedAccountId,
               amount: total,
               space: inv.space,
               transaction_date: transaction_date || getNowTodayISO(),
@@ -1336,19 +1341,19 @@ async function bootstrapServer() {
             });
           }
           inv.total_cost = Math.round((inv.total_cost + total) * 100) / 100;
-          inv.units = Math.round((inv.units + qty) * 10000) / 10000;
+          inv.units = roundToPrecision(inv.units + qty, 8);
           inv.buy_price_per_unit = inv.units > 0 ? Math.round((inv.total_cost / inv.units) * 100) / 100 : price;
           inv.current_market_price = price;
         } else if (type === 'sell') {
           if (qty > inv.units) throw new DomainError('Jumlah unit jual melebihi kepemilikan.', 422);
           const avgCost = inv.units > 0 ? inv.total_cost / inv.units : 0;
-          inv.units = Math.round((inv.units - qty) * 10000) / 10000;
+          inv.units = roundToPrecision(inv.units - qty, 8);
           inv.total_cost = Math.max(0, Math.round((inv.total_cost - avgCost * qty) * 100) / 100);
-          if (account_id) {
+          if (normalizedAccountId) {
             createTransaction(state, req.userId!, {
               type: 'income',
               category_id: 6,
-              account_id: Number(account_id),
+              account_id: normalizedAccountId,
               amount: total,
               space: inv.space,
               transaction_date: transaction_date || getNowTodayISO(),
@@ -1356,11 +1361,11 @@ async function bootstrapServer() {
               is_asset_allocation: true,
             });
           }
-        } else if (type === 'dividend' && account_id) {
+        } else if (type === 'dividend' && normalizedAccountId) {
           createTransaction(state, req.userId!, {
             type: 'income',
             category_id: 6,
-            account_id: Number(account_id),
+            account_id: normalizedAccountId,
             amount: total,
             space: inv.space,
             transaction_date: transaction_date || getNowTodayISO(),
@@ -1374,7 +1379,7 @@ async function bootstrapServer() {
           investment_id: inv.id,
           user_id: req.userId!,
           type,
-          account_id: account_id ? Number(account_id) : null,
+          account_id: normalizedAccountId,
           units: qty,
           price_per_unit: price,
           total_amount: total,

@@ -12,6 +12,20 @@ class StoreTransactionRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $updates = [];
+        foreach (['category_id', 'to_account_id', 'attachment_id'] as $field) {
+            $val = $this->input($field);
+            if ($val === '' || $val === 0 || $val === '0') {
+                $updates[$field] = null;
+            }
+        }
+        if ($updates !== []) {
+            $this->merge($updates);
+        }
+    }
+
     public function rules(): array
     {
         return [

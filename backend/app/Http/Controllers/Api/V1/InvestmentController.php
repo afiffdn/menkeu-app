@@ -107,6 +107,11 @@ class InvestmentController extends ApiController
             return $this->error('Akses ditolak.', 403);
         }
 
+        $rawAccountId = $request->input('account_id');
+        if ($rawAccountId === '' || $rawAccountId === 0 || $rawAccountId === '0') {
+            $request->merge(['account_id' => null]);
+        }
+
         $validated = $request->validate([
             'type' => ['required', 'in:buy,sell,dividend'],
             'units' => ['required', 'numeric', 'gte:0'],

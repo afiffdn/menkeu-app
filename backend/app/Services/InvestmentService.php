@@ -42,18 +42,18 @@ class InvestmentService
                 }
 
                 $investment->total_cost = bcadd((string) $investment->total_cost, $total, 2);
-                $investment->units = bcadd((string) $investment->units, $units, 4);
-                if (bccomp((string) $investment->units, '0', 4) > 0) {
+                $investment->units = bcadd((string) $investment->units, $units, 8);
+                if (bccomp((string) $investment->units, '0', 8) > 0) {
                     $investment->buy_price_per_unit = bcdiv((string) $investment->total_cost, (string) $investment->units, 4);
                 }
                 $investment->current_market_price = $price;
             } elseif ($type === 'sell') {
-                if (bccomp($units, (string) $investment->units, 4) > 0) {
+                if (bccomp($units, (string) $investment->units, 8) > 0) {
                     throw ValidationException::withMessages(['units' => ['Jumlah unit jual melebihi kepemilikan.']]);
                 }
-                $avgCost = bcdiv((string) $investment->total_cost, (string) $investment->units, 4);
+                $avgCost = bcdiv((string) $investment->total_cost, (string) $investment->units, 8);
                 $costReduction = bcmul($avgCost, $units, 2);
-                $investment->units = bcsub((string) $investment->units, $units, 4);
+                $investment->units = bcsub((string) $investment->units, $units, 8);
                 $remainingCost = bcsub((string) $investment->total_cost, $costReduction, 2);
                 $investment->total_cost = bccomp($remainingCost, '0.00', 2) < 0 ? '0.00' : $remainingCost;
 

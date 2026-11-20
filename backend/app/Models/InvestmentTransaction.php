@@ -22,7 +22,7 @@ class InvestmentTransaction extends Model
     protected function casts(): array
     {
         return [
-            'units' => 'decimal:4',
+            'units' => 'decimal:8',
             'price_per_unit' => 'decimal:4',
             'total_amount' => 'decimal:2',
             'transaction_date' => 'date:Y-m-d',

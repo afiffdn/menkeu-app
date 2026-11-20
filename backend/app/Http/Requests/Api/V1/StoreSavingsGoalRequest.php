@@ -12,6 +12,14 @@ class StoreSavingsGoalRequest extends FormRequest
         return true;
     }
 
+    protected function prepareForValidation(): void
+    {
+        $accountId = $this->input('account_id');
+        if ($accountId === '' || $accountId === 0 || $accountId === '0') {
+            $this->merge(['account_id' => null]);
+        }
+    }
+
     public function rules(): array
     {
         return [

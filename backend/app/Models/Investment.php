@@ -27,7 +27,7 @@ class Investment extends Model
     {
         return [
             'purchase_date' => 'date:Y-m-d',
-            'units' => 'decimal:4',
+            'units' => 'decimal:8',
             'buy_price_per_unit' => 'decimal:4',
             'total_cost' => 'decimal:2',
             'current_market_price' => 'decimal:4',

@@ -8,13 +8,14 @@ import { accountsApi, extractApiError, savingsApi } from '../services/api';
 import type { Account, SavingsGoal } from '../types/finance';
 import { formatDateID, formatIDR, getFutureDateISO, getSpaceLabel, getTodayISO } from '../utils/finance';
 import { Button, Card, EmptyState, ErrorBanner, Input, Modal, Select, StatCard } from '../components/ui/Primitives';
+import { optionalNullableIdSchema } from '../utils/formHelpers';
 
 const goalSchema = z.object({
   name: z.string().min(2, 'Nama target minimal 2 karakter'),
   target_amount: z.coerce.number().positive('Target nominal harus lebih dari 0'),
   start_date: z.string().min(1, 'Tanggal mulai wajib diisi'),
   target_date: z.string().min(1, 'Target selesai wajib diisi'),
-  account_id: z.coerce.number().optional().nullable(),
+  account_id: optionalNullableIdSchema,
   space: z.enum(['pribadi', 'keluarga', 'anak']),
 });
 
@@ -77,13 +78,17 @@ export function SavingsPage() {
 
   const handleCreateGoal = async (values: z.infer<typeof goalSchema>) => {
     try {
-      await savingsApi.create(values);
+      await savingsApi.create({
+        ...values,
+        account_id: values.account_id ?? null,
+      });
       setCreateOpen(false);
       goalForm.reset({
         name: '',
         target_amount: 10000000,
         start_date: getTodayISO(),
         target_date: getFutureDateISO(365),
+        account_id: null,
         space: 'keluarga',
       });
       triggerRefresh();

@@ -15,6 +15,7 @@ import {
   getTodayISO,
 } from '../utils/finance';
 import { Button, Card, EmptyState, ErrorBanner, Input, Modal, Select, StatCard } from '../components/ui/Primitives';
+import { optionalNullableIdSchema } from '../utils/formHelpers';
 
 const createSchema = z.object({
   name: z.string().min(2, 'Nama aset wajib diisi'),
@@ -26,7 +27,7 @@ const createSchema = z.object({
   buy_price_per_unit: z.coerce.number().positive('Harga beli wajib > 0'),
   current_market_price: z.coerce.number().positive('Harga pasar wajib > 0'),
   space: z.enum(['pribadi', 'keluarga', 'anak']),
-  source_account_id: z.coerce.number().optional().nullable(),
+  source_account_id: optionalNullableIdSchema,
 });
 
 const priceSchema = z.object({
@@ -35,9 +36,9 @@ const priceSchema = z.object({
 
 const txSchema = z.object({
   type: z.enum(['buy', 'sell', 'dividend']),
-  units: z.coerce.number().min(0),
+  units: z.coerce.number().min(0, 'Jumlah unit minimal 0'),
   price_per_unit: z.coerce.number().positive('Nominal / harga wajib > 0'),
-  account_id: z.coerce.number().optional().nullable(),
+  account_id: optionalNullableIdSchema,
   transaction_date: z.string().min(1),
   notes: z.string().optional(),
 });
@@ -52,6 +53,7 @@ export function InvestmentsPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editingPrice, setEditingPrice] = useState<Investment | null>(null);
   const [transactingInv, setTransactingInv] = useState<Investment | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
 
   const createForm = useForm<z.input<typeof createSchema>, unknown, z.output<typeof createSchema>>({
     resolver: zodResolver(createSchema),
@@ -110,35 +112,55 @@ export function InvestmentsPage() {
   }, [loadData, dataVersion]);
 
   const handleCreate = async (values: z.infer<typeof createSchema>) => {
+    setModalError(null);
     try {
-      await investmentsApi.create(values);
+      await investmentsApi.create({
+        ...values,
+        source_account_id: values.source_account_id ?? null,
+      });
       setCreateOpen(false);
-      createForm.reset();
+      createForm.reset({
+        name: '',
+        platform: '',
+        type: 'digital_gold',
+        purchase_date: getTodayISO(),
+        units: 5,
+        unit_label: 'gram',
+        buy_price_per_unit: 1450000,
+        current_market_price: 1465000,
+        space: 'keluarga',
+        source_account_id: null,
+      });
       triggerRefresh();
     } catch (err) {
-      setError(extractApiError(err));
+      setModalError(extractApiError(err));
     }
   };
 
   const handleUpdatePrice = async (values: z.infer<typeof priceSchema>) => {
     if (!editingPrice) return;
+    setModalError(null);
     try {
       await investmentsApi.updatePrice(editingPrice.id, values);
       setEditingPrice(null);
       triggerRefresh();
     } catch (err) {
-      setError(extractApiError(err));
+      setModalError(extractApiError(err));
     }
   };
 
   const handleTransact = async (values: z.infer<typeof txSchema>) => {
     if (!transactingInv) return;
+    setModalError(null);
     try {
-      await investmentsApi.transact(transactingInv.id, values);
+      await investmentsApi.transact(transactingInv.id, {
+        ...values,
+        account_id: values.account_id ?? null,
+      });
       setTransactingInv(null);
       triggerRefresh();
     } catch (err) {
-      setError(extractApiError(err));
+      setModalError(extractApiError(err));
     }
   };
 
@@ -159,7 +181,13 @@ export function InvestmentsPage() {
           </p>
         </div>
 
-        <Button size="sm" onClick={() => setCreateOpen(true)}>
+        <Button
+          size="sm"
+          onClick={() => {
+            setModalError(null);
+            setCreateOpen(true);
+          }}
+        >
           <Plus className="w-4 h-4" />
           Catat Aset Investasi
         </Button>
@@ -187,7 +215,10 @@ export function InvestmentsPage() {
             title="Belum ada aset investasi"
             description="Catat kepemilikan emas digital (gram), reksa dana, saham, atau deposito keluarga Anda."
             actionLabel="Tambah Investasi Pertama"
-            onAction={() => setCreateOpen(true)}
+            onAction={() => {
+              setModalError(null);
+              setCreateOpen(true);
+            }}
           />
         </Card>
       ) : (
@@ -213,11 +244,11 @@ export function InvestmentsPage() {
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs pt-2 border-t border-slate-100">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs pt-2 border-t border-slate-100">
                   <div>
                     <p className="text-slate-500">Kepemilikan</p>
                     <p className="font-mono tabular-nums font-semibold text-slate-900 mt-0.5">
-                      {formatNumberID(inv.units)} {inv.unit_label}
+                      {formatNumberID(inv.units, 8)} {inv.unit_label}
                     </p>
                   </div>
                   <div>
@@ -253,6 +284,7 @@ export function InvestmentsPage() {
                       variant="outline"
                       size="sm"
                       onClick={() => {
+                        setModalError(null);
                         setEditingPrice(inv);
                         priceForm.setValue('current_market_price', inv.current_market_price);
                       }}
@@ -263,6 +295,7 @@ export function InvestmentsPage() {
                     <Button
                       size="sm"
                       onClick={() => {
+                        setModalError(null);
                         setTransactingInv(inv);
                         txForm.reset({
                           type: 'buy',
@@ -288,8 +321,21 @@ export function InvestmentsPage() {
       )}
 
       {/* Create Investment Modal */}
-      <Modal open={createOpen} onClose={() => setCreateOpen(false)} title="Tambah Aset Investasi">
+      <Modal
+        open={createOpen}
+        onClose={() => {
+          setModalError(null);
+          setCreateOpen(false);
+        }}
+        title="Tambah Aset Investasi"
+      >
         <form onSubmit={createForm.handleSubmit(handleCreate)} className="space-y-4">
+          {modalError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+              {modalError}
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <Input
               label="Nama Aset"
@@ -313,18 +359,28 @@ export function InvestmentsPage() {
               <option value="deposit">Deposito</option>
               <option value="other">Investasi Lainnya</option>
             </Select>
-            <Input label="Tanggal Pembelian" type="date" {...createForm.register('purchase_date')} />
+            <Input
+              label="Tanggal Pembelian"
+              type="date"
+              error={createForm.formState.errors.purchase_date?.message}
+              {...createForm.register('purchase_date')}
+            />
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <Input
               label="Jumlah (Unit/Gram)"
               type="number"
-              step="0.0001"
+              step="any"
               className="font-mono tabular-nums"
+              error={createForm.formState.errors.units?.message}
               {...createForm.register('units')}
             />
-            <Input label="Satuan" {...createForm.register('unit_label')} />
+            <Input
+              label="Satuan"
+              error={createForm.formState.errors.unit_label?.message}
+              {...createForm.register('unit_label')}
+            />
             <Select label="Ruang" {...createForm.register('space')}>
               <option value="keluarga">Keluarga</option>
               <option value="pribadi">Pribadi</option>
@@ -336,18 +392,26 @@ export function InvestmentsPage() {
             <Input
               label="Harga Beli per Satuan (Rp)"
               type="number"
+              step="any"
               className="font-mono tabular-nums"
+              error={createForm.formState.errors.buy_price_per_unit?.message}
               {...createForm.register('buy_price_per_unit')}
             />
             <Input
               label="Harga Pasar Saat Ini (Rp)"
               type="number"
+              step="any"
               className="font-mono tabular-nums"
+              error={createForm.formState.errors.current_market_price?.message}
               {...createForm.register('current_market_price')}
             />
           </div>
 
-          <Select label="Potong Saldo dari Akun (Opsional)" {...createForm.register('source_account_id')}>
+          <Select
+            label="Potong Saldo dari Akun (Opsional)"
+            error={createForm.formState.errors.source_account_id?.message}
+            {...createForm.register('source_account_id')}
+          >
             <option value="">Hanya catat portofolio (tanpa mutasi kas)</option>
             {accounts.map((a) => (
               <option key={a.id} value={a.id}>
@@ -357,7 +421,14 @@ export function InvestmentsPage() {
           </Select>
 
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-            <Button type="button" variant="outline" onClick={() => setCreateOpen(false)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setModalError(null);
+                setCreateOpen(false);
+              }}
+            >
               Batal
             </Button>
             <Button type="submit" disabled={createForm.formState.isSubmitting}>
@@ -370,21 +441,37 @@ export function InvestmentsPage() {
       {/* Update Market Price Modal */}
       <Modal
         open={Boolean(editingPrice)}
-        onClose={() => setEditingPrice(null)}
+        onClose={() => {
+          setModalError(null);
+          setEditingPrice(null);
+        }}
         title={`Perbarui Harga Pasar · ${editingPrice?.name || ''}`}
         description="Masukkan harga pasar terbaru per unit/gram untuk menghitung estimasi keuntungan/kerugian."
         maxWidth="max-w-md"
       >
         <form onSubmit={priceForm.handleSubmit(handleUpdatePrice)} className="space-y-4">
+          {modalError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+              {modalError}
+            </div>
+          )}
           <Input
             label={`Harga Pasar Terbaru per ${editingPrice?.unit_label || 'unit'} (Rp)`}
             type="number"
+            step="any"
             className="font-mono tabular-nums"
             error={priceForm.formState.errors.current_market_price?.message}
             {...priceForm.register('current_market_price')}
           />
           <div className="flex justify-end gap-2 pt-2">
-            <Button type="button" variant="outline" onClick={() => setEditingPrice(null)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setModalError(null);
+                setEditingPrice(null);
+              }}
+            >
               Batal
             </Button>
             <Button type="submit" disabled={priceForm.formState.isSubmitting}>
@@ -397,10 +484,18 @@ export function InvestmentsPage() {
       {/* Buy/Sell/Dividend Modal */}
       <Modal
         open={Boolean(transactingInv)}
-        onClose={() => setTransactingInv(null)}
+        onClose={() => {
+          setModalError(null);
+          setTransactingInv(null);
+        }}
         title={`Transaksi Aset · ${transactingInv?.name || ''}`}
       >
         <form onSubmit={txForm.handleSubmit(handleTransact)} className="space-y-4">
+          {modalError && (
+            <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs text-red-700">
+              {modalError}
+            </div>
+          )}
           <Select label="Jenis Aksi" {...txForm.register('type')}>
             <option value="buy">Beli / Top-Up Unit</option>
             <option value="sell">Jual Unit</option>
@@ -410,19 +505,26 @@ export function InvestmentsPage() {
             <Input
               label={`Jumlah ${transactingInv?.unit_label || 'Unit'}`}
               type="number"
-              step="0.0001"
+              step="any"
               className="font-mono tabular-nums"
+              error={txForm.formState.errors.units?.message}
               {...txForm.register('units')}
             />
             <Input
               label="Harga per Unit / Nominal Dividen (Rp)"
               type="number"
+              step="any"
               className="font-mono tabular-nums"
+              error={txForm.formState.errors.price_per_unit?.message}
               {...txForm.register('price_per_unit')}
             />
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <Select label="Akun Kas Terkait" {...txForm.register('account_id')}>
+            <Select
+              label="Akun Kas Terkait"
+              error={txForm.formState.errors.account_id?.message}
+              {...txForm.register('account_id')}
+            >
               <option value="">Tanpa mutasi akun kas</option>
               {accounts.map((a) => (
                 <option key={a.id} value={a.id}>
@@ -430,11 +532,23 @@ export function InvestmentsPage() {
                 </option>
               ))}
             </Select>
-            <Input label="Tanggal" type="date" {...txForm.register('transaction_date')} />
+            <Input
+              label="Tanggal"
+              type="date"
+              error={txForm.formState.errors.transaction_date?.message}
+              {...txForm.register('transaction_date')}
+            />
           </div>
           <Input label="Catatan" {...txForm.register('notes')} />
           <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
-            <Button type="button" variant="outline" onClick={() => setTransactingInv(null)}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                setModalError(null);
+                setTransactingInv(null);
+              }}
+            >
               Batal
             </Button>
             <Button type="submit" disabled={txForm.formState.isSubmitting}>

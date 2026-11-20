@@ -15,13 +15,14 @@ import {
   getTodayISO,
 } from '../utils/finance';
 import { Button, Card, EmptyState, ErrorBanner, Input, Modal, Select, StatCard } from '../components/ui/Primitives';
+import { optionalNullableIdSchema } from '../utils/formHelpers';
 
 const billSchema = z.object({
   name: z.string().min(2, 'Nama tagihan wajib diisi'),
   amount: z.coerce.number().positive('Nominal harus lebih dari 0'),
   due_date: z.string().min(1, 'Tanggal jatuh tempo wajib diisi'),
   frequency: z.enum(['once', 'weekly', 'monthly', 'yearly']),
-  account_id: z.coerce.number().optional().nullable(),
+  account_id: optionalNullableIdSchema,
   space: z.enum(['pribadi', 'keluarga', 'anak']),
 });
 
@@ -77,13 +78,17 @@ export function BillsPage() {
 
   const handleCreate = async (values: z.infer<typeof billSchema>) => {
     try {
-      await billsApi.create(values);
+      await billsApi.create({
+        ...values,
+        account_id: values.account_id ?? null,
+      });
       setCreateOpen(false);
       billForm.reset({
         name: '',
         amount: 500000,
         due_date: getFutureDateISO(7),
         frequency: 'monthly',
+        account_id: null,
         space: 'keluarga',
       });
       triggerRefresh();
