@@ -97,12 +97,15 @@ function requireAuth(req: AuthedRequest, res: Response, next: NextFunction) {
   const state = getDbState();
 
   if (!rawToken) {
-    const primaryUser = state.users[0];
-    if (!primaryUser) {
-      return sendError(res, 'Profil pengguna utama belum tersedia.', 404);
+    if (process.env.WORKSPACE_NO_LOGIN === 'true') {
+      const primaryUser = state.users[0];
+      if (!primaryUser) {
+        return sendError(res, 'Profil pengguna utama belum tersedia.', 404);
+      }
+      req.userId = primaryUser.id;
+      return next();
     }
-    req.userId = primaryUser.id;
-    return next();
+    return sendError(res, 'Unauthenticated.', 401);
   }
 
   const tokenRow = state.tokens.find((t) => t.token === rawToken);
@@ -248,14 +251,7 @@ async function bootstrapServer() {
 
         return {
           token,
-          user: {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            avatar_url: user.avatar_url,
-            currency: user.currency,
-            created_at: user.created_at,
-          },
+          user: serializeUser(user),
         };
       });
 
@@ -762,6 +758,10 @@ async function bootstrapServer() {
         const cat = state.categories.find((c) => c.id === id);
         if (!cat) throw new DomainError('Kategori tidak ditemukan.', 404);
         if (cat.is_system) throw new DomainError('Kategori bawaan sistem tidak dapat diubah.', 422);
+        const famIds = getUserFamilyIds(state, req.userId!);
+        if (cat.user_id !== req.userId && (!cat.family_id || !famIds.includes(cat.family_id))) {
+          throw new DomainError('Akses ditolak.', 403);
+        }
         if (name) cat.name = String(name).trim();
         if (color) cat.color = color;
         return cat;
@@ -780,6 +780,10 @@ async function bootstrapServer() {
         const cat = state.categories.find((c) => c.id === id);
         if (!cat) throw new DomainError('Kategori tidak ditemukan.', 404);
         if (cat.is_system) throw new DomainError('Kategori bawaan sistem tidak dapat dihapus.', 422);
+        const famIds = getUserFamilyIds(state, req.userId!);
+        if (cat.user_id !== req.userId && (!cat.family_id || !famIds.includes(cat.family_id))) {
+          throw new DomainError('Akses ditolak.', 403);
+        }
         state.categories = state.categories.filter((c) => c.id !== id);
       });
       return sendSuccess(res, 'Kategori berhasil dihapus', null);
@@ -822,11 +826,17 @@ async function bootstrapServer() {
     return sendSuccess(res, 'Bukti transaksi berhasil diunggah', attachment, 201);
   });
 
-  api.get('/attachments/:id', (req, res) => {
+  api.get('/attachments/:id', requireAuth, (req: AuthedRequest, res) => {
     const id = Number(req.params.id);
     const state = getDbState();
     const att = state.attachments.find((a) => a.id === id);
     if (!att) return sendError(res, 'Lampiran tidak ditemukan.', 404);
+    if (att.user_id !== req.userId) {
+      const linkedTx = state.transactions.find((t) => t.attachment_id === att.id && !t.deleted_at);
+      if (!linkedTx || !canViewRecord(state, req.userId!, linkedTx)) {
+        return sendError(res, 'Akses ditolak.', 403);
+      }
+    }
     const uploadDir = path.resolve(process.cwd(), '.data', 'uploads');
     const filePath = path.join(uploadDir, `${att.id}_${att.file_name}`);
     if (!fs.existsSync(filePath)) return sendError(res, 'File tidak ditemukan.', 404);

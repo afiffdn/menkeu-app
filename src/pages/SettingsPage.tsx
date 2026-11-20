@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { ArrowRight, CheckCircle2, Home, Plus, Trash2, User } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Home, LogOut, Plus, Trash2, User } from 'lucide-react';
 import { useAuth } from '../hooks/useAuth';
 import { authApi, categoriesApi, extractApiError, familyApi } from '../services/api';
 import type { Category } from '../types/finance';
@@ -30,7 +30,8 @@ const familySchema = z.object({
 });
 
 export function SettingsPage() {
-  const { user, families, refreshProfile } = useAuth();
+  const { user, families, refreshProfile, logout } = useAuth();
+  const navigate = useNavigate();
   const primaryFamily = families[0] ?? null;
 
   const [categories, setCategories] = useState<Category[]>([]);
@@ -190,12 +191,26 @@ export function SettingsPage() {
             Lengkapi data diri Anda, profil keluarga, serta kelola kategori transaksi kustom.
           </p>
         </div>
-        <Link
-          to="/family"
-          className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:underline shrink-0"
-        >
-          Kelola Anggota Keluarga <ArrowRight className="w-3.5 h-3.5" />
-        </Link>
+        <div className="flex items-center gap-3 shrink-0">
+          <Link
+            to="/family"
+            className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:underline whitespace-nowrap"
+          >
+            Kelola Anggota Keluarga <ArrowRight className="w-3.5 h-3.5" />
+          </Link>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={async () => {
+              await logout();
+              navigate('/login', { replace: true });
+            }}
+          >
+            <LogOut className="w-3.5 h-3.5" />
+            Keluar
+          </Button>
+        </div>
       </div>
 
       {error && <ErrorBanner message={error} />}

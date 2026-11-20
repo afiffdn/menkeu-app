@@ -46,6 +46,10 @@ class CategoryController extends ApiController
             return $this->error('Kategori sistem tidak dapat diubah.', 422);
         }
 
+        if (! $this->canManageCategory($request->user(), $category)) {
+            return $this->error('Akses ditolak.', 403);
+        }
+
         $validated = $request->validate([
             'name' => ['sometimes', 'string', 'min:2', 'max:80'],
             'color' => ['nullable', 'string', 'max:20'],
@@ -56,14 +60,31 @@ class CategoryController extends ApiController
         return $this->success('Kategori berhasil diperbarui', $category);
     }
 
-    public function destroy(Category $category): JsonResponse
+    public function destroy(Request $request, Category $category): JsonResponse
     {
         if ($category->is_system) {
             return $this->error('Kategori sistem tidak dapat dihapus.', 422);
         }
 
+        if (! $this->canManageCategory($request->user(), $category)) {
+            return $this->error('Akses ditolak.', 403);
+        }
+
         $category->delete();
 
         return $this->success('Kategori berhasil dihapus');
+    }
+
+    private function canManageCategory($user, Category $category): bool
+    {
+        if ((int) $category->user_id === (int) $user->id) {
+            return true;
+        }
+
+        if ($category->family_id) {
+            return $user->families()->where('families.id', $category->family_id)->exists();
+        }
+
+        return false;
     }
 }

@@ -147,3 +147,47 @@ test('computeAvailableYears and computeMultiYearSummary work dynamically across 
   assert.equal(y2032.income, 25000000);
   assert.equal(y2032.savings_rate, 100);
 });
+
+test('newly registered independent user cannot view any data from existing users or families', () => {
+  const state = createDemoSeedState();
+  recalculateAllAccountBalances(state);
+
+  const newUserId = 99;
+  const newFamilyId = 99;
+  state.users.push({
+    id: newUserId,
+    name: 'Budi Santoso',
+    email: 'budi@contoh.id',
+    password_hash: 'hash',
+    avatar_url: null,
+    currency: 'IDR',
+    created_at: new Date().toISOString(),
+  });
+  state.families.push({
+    id: newFamilyId,
+    name: 'Keluarga Santoso',
+    owner_id: newUserId,
+    description: null,
+    created_at: new Date().toISOString(),
+  });
+  state.family_members.push({
+    id: 99,
+    family_id: newFamilyId,
+    user_id: newUserId,
+    role: 'owner',
+    can_view_private: false,
+    joined_at: new Date().toISOString(),
+  });
+
+  const existingSharedAccount = state.accounts.find((a) => a.id === 1)!;
+  assert.equal(canViewRecord(state, newUserId, existingSharedAccount), false);
+
+  const summary = computeDashboardSummary(state, newUserId, { month: 11, year: 2026 });
+  assert.equal(summary.total_balance, 0);
+  assert.equal(summary.monthly_income, 0);
+  assert.equal(summary.monthly_expense, 0);
+  assert.equal(summary.recent_transactions.length, 0);
+  assert.equal(summary.budgets.length, 0);
+  assert.equal(summary.savings_goals.length, 0);
+  assert.equal(summary.upcoming_bills.length, 0);
+});

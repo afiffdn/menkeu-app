@@ -14,7 +14,7 @@ class ResolveWorkspaceUser
     {
         // When a Bearer token is explicitly provided (e.g. mobile clients or token tests),
         // let standard Sanctum guard authenticate the exact token owner.
-        if (! $request->bearerToken() && filter_var(env('WORKSPACE_NO_LOGIN', true), FILTER_VALIDATE_BOOLEAN)) {
+        if (! $request->bearerToken() && filter_var(env('WORKSPACE_NO_LOGIN', false), FILTER_VALIDATE_BOOLEAN)) {
             $primaryUser = User::query()->orderBy('id')->first();
             if ($primaryUser) {
                 Auth::guard('sanctum')->setUser($primaryUser);

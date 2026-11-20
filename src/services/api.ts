@@ -42,7 +42,7 @@ const TOKEN_STORAGE_KEY = 'ff_auth_token';
 
 export function getStoredToken(): string | null {
   try {
-    return sessionStorage.getItem(TOKEN_STORAGE_KEY);
+    return localStorage.getItem(TOKEN_STORAGE_KEY) || sessionStorage.getItem(TOKEN_STORAGE_KEY);
   } catch {
     return null;
   }
@@ -51,8 +51,10 @@ export function getStoredToken(): string | null {
 export function setStoredToken(token: string | null): void {
   try {
     if (token) {
-      sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
     } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
       sessionStorage.removeItem(TOKEN_STORAGE_KEY);
     }
   } catch {
@@ -75,6 +77,23 @@ apiClient.interceptors.request.use((config) => {
   }
   return config;
 });
+
+apiClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (axios.isAxiosError(error) && error.response?.status === 401) {
+      const reqUrl = String(error.config?.url || '');
+      const isAuthAction = reqUrl.includes('/auth/login') || reqUrl.includes('/auth/register');
+      if (!isAuthAction && getStoredToken()) {
+        setStoredToken(null);
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new CustomEvent('ff:unauthorized'));
+        }
+      }
+    }
+    return Promise.reject(error);
+  }
+);
 
 export function extractApiError(err: unknown): string {
   if (axios.isAxiosError(err)) {
