@@ -1,0 +1,30 @@
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: family_finance_mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: family_finance
+      MYSQL_USER: family_user
+      MYSQL_PASSWORD: family_secret_password
+      MYSQL_ROOT_PASSWORD: root_secret_password
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  backend:
+    image: php:8.3-cli
+    container_name: family_finance_laravel
+    working_dir: /var/www/html
+    volumes:
+      - ./backend:/var/www/html
+    ports:
+      - "8000:8000"
+    depends_on:
+      - mysql
+    command: >
+      sh -c "php artisan serve --host=0.0.0.0 --port=8000"
+
+volumes:
+  mysql_data:

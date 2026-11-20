@@ -1,0 +1,331 @@
+openapi: 3.1.0
+info:
+  title: Family Finance REST API
+  version: 1.0.0
+  description: >
+    API-first backend untuk sistem manajemen keuangan pribadi dan keluarga (Web Dashboard & Mobile Android/iOS).
+    Seluruh endpoint terproteksi menggunakan Laravel Sanctum Bearer Token kecuali `/auth/register` dan `/auth/login`.
+servers:
+  - url: http://localhost:8000/api/v1
+    description: Local Laravel API Server
+  - url: http://localhost:3000/api/v1
+    description: Preview Runtime Server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: SanctumToken
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+        data:
+          type: object
+    ErrorEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+        errors:
+          type: object
+    TransactionRequest:
+      type: object
+      required: [type, account_id, amount, transaction_date]
+      properties:
+        type:
+          type: string
+          enum: [income, expense, transfer]
+        category_id:
+          type: integer
+          nullable: true
+        account_id:
+          type: integer
+        to_account_id:
+          type: integer
+          nullable: true
+        amount:
+          type: number
+          example: 150000
+        space:
+          type: string
+          enum: [pribadi, keluarga, anak]
+        transaction_date:
+          type: string
+          format: date
+          example: "2026-11-17"
+        notes:
+          type: string
+        idempotency_key:
+          type: string
+        attachment_id:
+          type: integer
+          nullable: true
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      summary: Registrasi pengguna baru
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, minLength: 6 }
+                family_name: { type: string }
+      responses:
+        "201": { description: Registrasi berhasil }
+        "422": { description: Validasi gagal }
+  /auth/login:
+    post:
+      summary: Login dan dapatkan Sanctum Bearer token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string }
+                device_name: { type: string }
+      responses:
+        "200": { description: Login berhasil }
+        "401": { description: Kredensial salah }
+  /auth/logout:
+    post:
+      summary: Logout dan hapus token aktif
+      responses:
+        "200": { description: Logout berhasil }
+  /auth/me:
+    get:
+      summary: Ambil profil pengguna dan daftar keluarga
+      responses:
+        "200": { description: Profil berhasil dimuat }
+  /dashboard/summary:
+    get:
+      summary: Ringkasan KPI keuangan dashboard
+      parameters:
+        - { name: month, in: query, schema: { type: integer } }
+        - { name: year, in: query, schema: { type: integer } }
+        - { name: space, in: query, schema: { type: string, enum: [all, pribadi, keluarga, anak] } }
+        - { name: member_id, in: query, schema: { type: string } }
+        - { name: account_id, in: query, schema: { type: string } }
+      responses:
+        "200": { description: Ringkasan berhasil dimuat }
+  /dashboard/cash-flow:
+    get:
+      summary: Grafik arus kas bulanan
+      responses:
+        "200": { description: Data grafik arus kas }
+  /dashboard/expense-categories:
+    get:
+      summary: Distribusi pengeluaran per kategori
+      responses:
+        "200": { description: Breakdown kategori }
+  /dashboard/recent-transactions:
+    get:
+      summary: Daftar transaksi terbaru
+      responses:
+        "200": { description: Transaksi terbaru }
+  /families:
+    get:
+      summary: Daftar keluarga pengguna
+      responses:
+        "200": { description: Daftar keluarga }
+    post:
+      summary: Buat keluarga baru
+      responses:
+        "201": { description: Keluarga berhasil dibuat }
+  /families/{id}:
+    get:
+      summary: Detail keluarga dan daftar anggota
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Detail keluarga }
+  /families/{id}/members:
+    post:
+      summary: Undang atau tambahkan anggota keluarga
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "201": { description: Anggota ditambahkan }
+  /families/{id}/members/{memberId}:
+    delete:
+      summary: Hapus anggota keluarga
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: memberId, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Anggota dihapus }
+  /accounts:
+    get:
+      summary: Daftar akun keuangan yang dapat diakses pengguna
+      responses:
+        "200": { description: Daftar akun }
+    post:
+      summary: Tambah akun keuangan baru
+      responses:
+        "201": { description: Akun ditambahkan }
+  /accounts/{id}/transactions:
+    get:
+      summary: Riwayat mutasi transaksi akun
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Mutasi akun }
+  /transactions:
+    get:
+      summary: Daftar transaksi dengan pagination & filter
+      responses:
+        "200": { description: Daftar transaksi }
+    post:
+      summary: Catat transaksi baru (mendukung X-Idempotency-Key)
+      parameters:
+        - { name: X-Idempotency-Key, in: header, required: false, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TransactionRequest"
+      responses:
+        "201": { description: Transaksi disimpan }
+  /transactions/{id}:
+    get:
+      summary: Detail transaksi
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Detail transaksi }
+    put:
+      summary: Ubah transaksi dan hitung ulang saldo akun
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Transaksi diperbarui }
+    delete:
+      summary: Soft-delete transaksi dan kembalikan saldo akun
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Transaksi dihapus }
+  /budgets:
+    get:
+      summary: Daftar anggaran kategori & realisasi aktual
+      responses:
+        "200": { description: Daftar anggaran }
+    post:
+      summary: Buat anggaran baru
+      responses:
+        "201": { description: Anggaran dibuat }
+  /savings-goals:
+    get:
+      summary: Daftar target tabungan
+      responses:
+        "200": { description: Target tabungan }
+    post:
+      summary: Buat target tabungan baru
+      responses:
+        "201": { description: Target tabungan dibuat }
+  /savings-goals/{id}/contributions:
+    post:
+      summary: Catat setoran tabungan (non-konsumtif)
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "201": { description: Setoran tercatat }
+  /emergency-funds:
+    get:
+      summary: Daftar dana darurat
+      responses:
+        "200": { description: Dana darurat }
+    post:
+      summary: Buat target dana darurat
+      responses:
+        "201": { description: Dana darurat dibuat }
+  /emergency-funds/{id}/transactions:
+    post:
+      summary: Setoran atau penarikan dana darurat
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "201": { description: Mutasi tercatat }
+  /investments:
+    get:
+      summary: Portofolio investasi & emas digital
+      responses:
+        "200": { description: Daftar investasi }
+    post:
+      summary: Tambah aset investasi baru
+      responses:
+        "201": { description: Investasi ditambahkan }
+  /investments/{id}/transactions:
+    post:
+      summary: Catat beli/jual/dividen investasi
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "201": { description: Transaksi investasi tercatat }
+  /bills:
+    get:
+      summary: Daftar tagihan & cicilan
+      responses:
+        "200": { description: Daftar tagihan }
+    post:
+      summary: Tambah tagihan baru
+      responses:
+        "201": { description: Tagihan ditambahkan }
+  /bills/{id}/payments:
+    post:
+      summary: Catat pembayaran tagihan
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "201": { description: Pembayaran tercatat }
+  /reports/monthly:
+    get:
+      summary: Laporan keuangan bulanan
+      responses:
+        "200": { description: Laporan bulanan }
+  /reports/yearly:
+    get:
+      summary: Laporan keuangan tahunan
+      responses:
+        "200": { description: Laporan tahunan }
+  /reports/cash-flow:
+    get:
+      summary: Laporan arus kas
+      responses:
+        "200": { description: Laporan arus kas }
+  /reports/expenses:
+    get:
+      summary: Laporan pengeluaran konsumtif
+      responses:
+        "200": { description: Laporan pengeluaran }
+  /reports/income:
+    get:
+      summary: Laporan pemasukan
+      responses:
+        "200": { description: Laporan pemasukan }
